@@ -1354,7 +1354,7 @@ p4est_vtk_write_cell_datav (p4est_vtk_context_t * cont,
 
     for (i = 0; i < num_cell_vectors; ++all, i++)
       fprintf (cont->pvtufile, "      "
-               "<PDataArray type=\"%s\" Name=\"%s\" format=\"%s\"/>\n",
+               "<PDataArray type=\"%s\" Name=\"%s\" NumberOfComponents=\"3\" format=\"%s\"/>\n",
                P4EST_VTK_FLOAT_NAME, names[all], P4EST_VTK_FORMAT_STRING);
 
     fprintf (cont->pvtufile, "    </PCellData>\n");
@@ -1561,9 +1561,71 @@ p4est_vtk_context_t *
 p4est_vtk_write_cell_vector (p4est_vtk_context_t * cont,
                              const char *vector_name, sc_array_t * values)
 {
+  const p4est_locidx_t Ncells = cont->p4est->local_num_quadrants;
+  const p4est_locidx_t Nvcell = 3 * Ncells; /* write three components for each cell */
+  p4est_locidx_t      il;
+#ifndef P4EST_VTK_ASCII
+  int                 retval;
+  P4EST_VTK_FLOAT_TYPE *float_data;
+#endif
+
   P4EST_ASSERT (cont != NULL && cont->writing);
 
-  SC_ABORT (P4EST_STRING "_vtk_write_cell_vector not implemented");
+  /* Write cell data. */
+  fprintf (cont->vtufile, "        <DataArray type=\"%s\" Name=\"%s\""
+           " NumberOfComponents=\"3\" format=\"%s\">\n",
+           P4EST_VTK_FLOAT_NAME, vector_name, P4EST_VTK_FORMAT_STRING);
+
+#ifdef P4EST_VTK_ASCII
+  for (il = 0; il < Nvcell; il += 3) {
+    fprintf (cont->vtufile,
+#ifdef P4EST_VTK_DOUBLES
+             "     %24.16e %24.16e %24.16e\n",
+#else
+             "          %16.8e %16.8e %16.8e\n",
+#endif
+             *(double *) sc_array_index (values, il),
+             *(double *) sc_array_index (values, il + 1),
+             *(double *) sc_array_index (values, il + 2));
+  }
+#else
+  float_data = P4EST_ALLOC (P4EST_VTK_FLOAT_TYPE, Nvcell);
+  for (il = 0; il < Nvcell; il += 3) {
+    /* manual loop unroll for x, y and z component */
+    float_data[il] =
+      (P4EST_VTK_FLOAT_TYPE) * ((double *) sc_array_index (values, il  ));
+    float_data[il + 1] =
+      (P4EST_VTK_FLOAT_TYPE) * ((double *) sc_array_index (values, il+1));
+    float_data[il + 2] =
+      (P4EST_VTK_FLOAT_TYPE) * ((double *) sc_array_index (values, il+2));
+  }
+
+  fprintf (cont->vtufile, "          ");
+  /* TODO: Don't allocate the full size of the array, only allocate
+   * the chunk that will be passed to zlib and do this a chunk
+   * at a time.
+   */
+  retval = p4est_vtk_write_binary (cont->vtufile, (char *) float_data,
+                                   sizeof (*float_data) * Nvcell);
+  fprintf (cont->vtufile, "\n");
+
+  P4EST_FREE (float_data);
+
+  if (retval) {
+    P4EST_LERROR (P4EST_STRING "_vtk: Error encoding vector cell data\n");
+    p4est_vtk_context_destroy (cont);
+    return NULL;
+  }
+#endif
+  fprintf (cont->vtufile, "        </DataArray>\n");
+
+  if (ferror (cont->vtufile)) {
+    P4EST_LERROR (P4EST_STRING "_vtk: Error writing cell vector file\n");
+    p4est_vtk_context_destroy (cont);
+    return NULL;
+  }
+  return cont;
+  //SC_ABORT (P4EST_STRING "_vtk_write_cell_vector not implemented");
 }
 
 int
